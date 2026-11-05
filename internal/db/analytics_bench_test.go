@@ -19,6 +19,8 @@ func BenchmarkGetAnalyticsSummaryOutOfRangeHistory(b *testing.B) {
 				if old > 0 {
 					seedTrendsSessions(b, d, "old", old, "2026-09-15", 300, "hello")
 				}
+				_, err := d.getWriter().ExecContext(ctx, "UPDATE sessions SET project = 'project-recent' WHERE id LIKE 'recent-%'")
+				require.NoError(b, err)
 				if order == "shuffled" {
 					// Randomize table order independently of session dates, as out-of-order syncs do.
 					_, err := d.getWriter().ExecContext(ctx, `
@@ -30,15 +32,16 @@ func BenchmarkGetAnalyticsSummaryOutOfRangeHistory(b *testing.B) {
 				}
 				for _, timezone := range []string{"UTC", "America/New_York"} {
 					for _, window := range []struct {
-						name, from, to string
-						want           int
+						name, from, to, project string
+						want                    int
 					}{
-						{"two_days", "2026-10-31", "2026-11-01", 300},
-						{"empty", "2026-11-03", "2026-11-04", 0},
-						{"year", "2025-11-02", "2026-11-01", old + 300},
+						{"two_days", "2026-10-31", "2026-11-01", "", 300},
+						{"empty", "2026-11-03", "2026-11-04", "", 0},
+						{"year", "2025-11-02", "2026-11-01", "", old + 300},
+						{"year_project", "2025-11-02", "2026-11-01", "project-recent", 300},
 					} {
 						b.Run(timezone+"/"+window.name, func(b *testing.B) {
-							f := AnalyticsFilter{From: window.from, To: window.to, Timezone: timezone}
+							f := AnalyticsFilter{From: window.from, To: window.to, Timezone: timezone, Project: window.project}
 							b.ReportAllocs()
 							b.ResetTimer()
 							for b.Loop() {

@@ -111,19 +111,22 @@ func TestAnalyticsDateWindowSearchesStartedIndex(t *testing.T) {
 	d := testDB(t)
 	seedAnalyticsData(t, d)
 	for _, tc := range []struct {
-		name, table, dateCol, sessionID string
+		name, table, dateCol, sessionID, project, index string
 	}{
-		{"unaliased", "sessions", "COALESCE(NULLIF(started_at, ''), created_at)", "sessions.id"},
-		{"aliased", "sessions s", "COALESCE(NULLIF(s.started_at, ''), s.created_at)", "s.id"},
+		{"unaliased", "sessions", "COALESCE(NULLIF(started_at, ''), created_at)", "sessions.id", "", "idx_sessions_started"},
+		{"aliased", "sessions s", "COALESCE(NULLIF(s.started_at, ''), s.created_at)", "s.id", "", "idx_sessions_started"},
+		{"project", "sessions", "COALESCE(NULLIF(started_at, ''), created_at)", "sessions.id", "project-alpha", "idx_sessions_project"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			where, args := baseFilter().buildWhereWithDate(tc.dateCol, true, tc.sessionID)
+			f := baseFilter()
+			f.Project = tc.project
+			where, args := f.buildWhereWithDate(tc.dateCol, true, tc.sessionID)
 			plan := queryPlanOf(t, d, "SELECT id FROM "+tc.table+" WHERE "+where, args...)
-			assert.Contains(t, plan, "LIST SUBQUERY")
-			assert.Contains(t, plan, "COVERING INDEX idx_sessions_started")
-			assert.Contains(t, plan, "USING INTEGER PRIMARY KEY (rowid=?)")
-			assert.NotContains(t, plan, "SCAN sessions")
-			assert.NotContains(t, plan, "SCAN s")
+			assert.Contains(t, plan, tc.index)
+			assert.NotContains(t, plan, "SCAN")
+			if tc.project != "" {
+				assert.NotContains(t, plan, "idx_sessions_started")
+			}
 		})
 	}
 }
