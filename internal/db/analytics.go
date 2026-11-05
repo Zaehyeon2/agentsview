@@ -356,6 +356,8 @@ func analyticsSessionPrefix(sessionIDExpr string) string {
 	return table + "."
 }
 
+const analyticsGuardMaxDays = 90
+
 func (f AnalyticsFilter) buildWhereWithDate(dateCol string, includeDate bool, sessionIDExpr string) (string, []any) {
 	if sessionIDExpr == "" {
 		sessionIDExpr = "sessions.id"
@@ -365,9 +367,13 @@ func (f AnalyticsFilter) buildWhereWithDate(dateCol string, includeDate bool, se
 	if includeDate {
 		from, to := f.utcRange()
 		dates = append(dates, dateCol+" >= "+b.Add(from), dateCol+" <= "+b.Add(to))
-		// The date bounds already imply this guard; the NULL/empty arms keep the created_at fallback.
-		p := analyticsSessionPrefix(sessionIDExpr)
-		dates = append(dates, "("+p+"started_at BETWEEN "+b.Add(from)+" AND "+b.Add(to)+" OR "+p+"started_at IS NULL OR "+p+"started_at = '')")
+		fromDate, fromErr := time.Parse("2006-01-02", f.From)
+		toDate, toErr := time.Parse("2006-01-02", f.To)
+		// Wide windows hold most sessions, so walking the index costs more than main's plan.
+		if fromErr == nil && toErr == nil && toDate.Sub(fromDate) <= analyticsGuardMaxDays*24*time.Hour {
+			p := analyticsSessionPrefix(sessionIDExpr)
+			dates = append(dates, "("+p+"started_at BETWEEN "+b.Add(from)+" AND "+b.Add(to)+" OR "+p+"started_at IS NULL OR "+p+"started_at = '')")
+		}
 	}
 	where := BuildAnalyticsWhere(f, b, "", sessionIDExpr, dates)
 	return where, b.Args()

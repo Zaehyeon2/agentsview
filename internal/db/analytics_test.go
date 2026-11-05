@@ -111,23 +111,43 @@ func TestAnalyticsDateWindowSearchesStartedIndex(t *testing.T) {
 	d := testDB(t)
 	seedAnalyticsData(t, d)
 	for _, tc := range []struct {
-		name, table, dateCol, sessionID, project, index string
+		name, table, dateCol, sessionID, project string
 	}{
-		{"unaliased", "sessions", "COALESCE(NULLIF(started_at, ''), created_at)", "sessions.id", "", "idx_sessions_started"},
-		{"aliased", "sessions s", "COALESCE(NULLIF(s.started_at, ''), s.created_at)", "s.id", "", "idx_sessions_started"},
-		{"project", "sessions", "COALESCE(NULLIF(started_at, ''), created_at)", "sessions.id", "project-alpha", "idx_sessions_project"},
+		{"unaliased", "sessions", "COALESCE(NULLIF(started_at, ''), created_at)", "sessions.id", ""},
+		{"aliased", "sessions s", "COALESCE(NULLIF(s.started_at, ''), s.created_at)", "s.id", ""},
+		{"project", "sessions", "COALESCE(NULLIF(started_at, ''), created_at)", "sessions.id", "project-alpha"},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			f := baseFilter()
-			f.Project = tc.project
-			where, args := f.buildWhereWithDate(tc.dateCol, true, tc.sessionID)
-			plan := queryPlanOf(t, d, "SELECT id FROM "+tc.table+" WHERE "+where, args...)
-			assert.Contains(t, plan, tc.index)
-			assert.NotContains(t, plan, "SCAN")
-			if tc.project != "" {
-				assert.NotContains(t, plan, "idx_sessions_started")
-			}
-		})
+		for _, window := range []struct {
+			name, from, to string
+			guard          bool
+		}{
+			{"two_days", "2024-06-01", "2024-06-03", true},
+			{"90_days", "2024-01-01", "2024-03-31", true},
+			{"91_days", "2024-01-01", "2024-04-01", false},
+			{"year", "2023-06-04", "2024-06-03", false},
+			{"unbounded", "", "", false},
+			{"from_only", "2024-06-01", "", false},
+			{"to_only", "", "2024-06-03", false},
+			{"invalid_from", "2024-02-30", "2024-06-03", false},
+			{"invalid_to", "2024-06-01", "invalid", false},
+		} {
+			t.Run(tc.name+"/"+window.name, func(t *testing.T) {
+				f := AnalyticsFilter{From: window.from, To: window.to, Timezone: "UTC", Project: tc.project}
+				where, args := f.buildWhereWithDate(tc.dateCol, true, tc.sessionID)
+				plan := queryPlanOf(t, d, "SELECT id FROM "+tc.table+" WHERE "+where, args...)
+				switch {
+				case tc.project != "":
+					assert.Contains(t, plan, "idx_sessions_project")
+					assert.NotContains(t, plan, "idx_sessions_started")
+				case window.guard:
+					assert.Contains(t, plan, "MULTI-INDEX OR")
+					assert.Contains(t, plan, "idx_sessions_started")
+					assert.NotContains(t, plan, "SCAN")
+				default:
+					assert.NotContains(t, plan, "idx_sessions_started")
+				}
+			})
+		}
 	}
 }
 
