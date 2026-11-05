@@ -107,6 +107,72 @@ func baseFilter() AnalyticsFilter {
 	}
 }
 
+func TestAnalyticsDateWindowSearchesStartedIndex(t *testing.T) {
+	d := testDB(t)
+	seedAnalyticsData(t, d)
+	for _, tc := range []struct {
+		name, table, dateCol, sessionID string
+	}{
+		{"unaliased", "sessions", "COALESCE(NULLIF(started_at, ''), created_at)", "sessions.id"},
+		{"aliased", "sessions s", "COALESCE(NULLIF(s.started_at, ''), s.created_at)", "s.id"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			where, args := baseFilter().buildWhereWithDate(tc.dateCol, true, tc.sessionID)
+			rows, err := d.getReader().QueryContext(t.Context(), "EXPLAIN QUERY PLAN SELECT id FROM "+tc.table+" WHERE "+where, args...)
+			require.NoError(t, err)
+			defer rows.Close()
+			plan := strings.Join(explainQueryPlanDetails(t, rows), "\n")
+			assert.Contains(t, plan, "idx_sessions_started")
+			assert.NotContains(t, plan, "SCAN sessions")
+			assert.NotContains(t, plan, "SCAN s")
+		})
+	}
+}
+
+func TestAnalyticsDateWindowKeepsCreatedAtFallback(t *testing.T) {
+	d := testDB(t)
+	for _, tc := range []struct {
+		id, created string
+		started     *string
+	}{
+		{"started", "2024-06-01T12:00:00Z", new("2024-06-01T12:00:00Z")},
+		{"empty", "2024-06-01T12:00:00Z", new("")},
+		{"null", "2024-06-01T12:00:00Z", nil},
+		{"shifted", "2024-06-02T02:00:00Z", new("2024-06-02T02:00:00Z")},
+		{"outside", "2024-06-03T12:00:00Z", new("2024-06-03T12:00:00Z")},
+	} {
+		insertSession(t, d, tc.id, "project-a", func(s *Session) {
+			s.StartedAt = tc.started
+			s.MessageCount = 1
+		})
+		_, err := d.getWriter().ExecContext(t.Context(), "UPDATE sessions SET created_at = ? WHERE id = ?", tc.created, tc.id)
+		require.NoError(t, err)
+		insertMessages(t, d, userMsgAt(tc.id, 0, "hello", tc.created))
+	}
+	for _, tc := range []struct {
+		name, from, to string
+		want           int
+	}{
+		{"bounded", "2024-06-01", "2024-06-01", 4},
+		{"from_only", "2024-06-01", "", 5},
+		{"to_only", "", "2024-06-01", 4},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := AnalyticsFilter{From: tc.from, To: tc.to, Timezone: "America/New_York"}
+			summary, err := d.GetAnalyticsSummary(t.Context(), f)
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, summary.TotalSessions)
+			heatmap, err := d.GetAnalyticsHourOfWeek(t.Context(), f)
+			require.NoError(t, err)
+			messages := 0
+			for _, cell := range heatmap.Cells {
+				messages += cell.Messages
+			}
+			assert.Equal(t, tc.want, messages)
+		})
+	}
+}
+
 func emptyFilter() AnalyticsFilter {
 	return AnalyticsFilter{
 		From:     "2020-01-01",

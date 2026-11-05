@@ -352,14 +352,17 @@ func (db *DB) getAnalyticsFilteredMessageStats(
 }
 
 func (f AnalyticsFilter) buildWhereWithDate(dateCol string, includeDate bool, sessionIDExpr string) (string, []any) {
+	if sessionIDExpr == "" {
+		sessionIDExpr = "sessions.id"
+	}
 	b := NewQueryBuilder(SQLiteQueryDialect(), 0)
 	var dates []string
 	if includeDate {
 		from, to := f.utcRange()
 		dates = append(dates, dateCol+" >= "+b.Add(from), dateCol+" <= "+b.Add(to))
-	}
-	if sessionIDExpr == "" {
-		sessionIDExpr = "sessions.id"
+		startedAt := strings.TrimSuffix(sessionIDExpr, "id") + "started_at"
+		// The date bounds imply this index guard; NULL and empty starts keep the created_at fallback.
+		dates = append(dates, "("+startedAt+" BETWEEN "+b.Add(from)+" AND "+b.Add(to)+" OR "+startedAt+" IS NULL OR "+startedAt+" = '')")
 	}
 	where := BuildAnalyticsWhere(f, b, "", sessionIDExpr, dates)
 	return where, b.Args()
