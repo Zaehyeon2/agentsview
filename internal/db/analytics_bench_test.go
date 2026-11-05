@@ -11,38 +11,46 @@ import (
 
 func BenchmarkGetAnalyticsSummaryOutOfRangeHistory(b *testing.B) {
 	for _, old := range []int{0, 3000, 30000} {
-		b.Run(fmt.Sprintf("history=%d", old), func(b *testing.B) {
-			d := testDB(b)
-			ctx := b.Context()
-			_, err := d.getWriter().ExecContext(ctx, `
-				WITH RECURSIVE seq(n) AS (SELECT 0 UNION ALL SELECT n + 1 FROM seq WHERE n < ? - 1)
-				INSERT INTO sessions (id, project, machine, agent, message_count, started_at)
-				SELECT printf('session-%06d', n), 'bench', 'local', 'claude', 1 + n % 80,
-					CASE WHEN n < 300
-					THEN strftime('%Y-%m-%dT12:00:00Z', '2026-11-01', printf('-%d days', n % 2))
-					ELSE strftime('%Y-%m-%dT12:00:00Z', '2026-09-15', printf('-%d days', n % 300)) END
-				FROM seq`, old+300)
-			require.NoError(b, err)
-			for _, window := range []struct {
-				name, from, to string
-				want           int
-			}{
-				{"two_days", "2026-10-31", "2026-11-01", 300},
-				{"empty", "2026-11-03", "2026-11-04", 0},
-				{"year", "2025-11-02", "2026-11-01", old + 300},
-			} {
-				b.Run(window.name, func(b *testing.B) {
-					f := AnalyticsFilter{From: window.from, To: window.to, Timezone: "UTC"}
-					b.ReportAllocs()
-					b.ResetTimer()
-					for b.Loop() {
-						resp, err := d.GetAnalyticsSummary(ctx, f)
-						require.NoError(b, err)
-						require.Equal(b, window.want, resp.TotalSessions)
+		for _, order := range []string{"seeded", "shuffled"} {
+			b.Run(fmt.Sprintf("history=%d/%s", old, order), func(b *testing.B) {
+				d := testDB(b)
+				ctx := b.Context()
+				seedTrendsSessions(b, d, "recent", 300, "2026-11-01", 2, "hello")
+				if old > 0 {
+					seedTrendsSessions(b, d, "old", old, "2026-09-15", 300, "hello")
+				}
+				if order == "shuffled" {
+					// Randomize table order independently of session dates, as out-of-order syncs do.
+					_, err := d.getWriter().ExecContext(ctx, `
+						WITH shuffled AS MATERIALIZED (
+							SELECT rowid AS old, -row_number() OVER (ORDER BY random()) AS shuffled FROM sessions
+						)
+						UPDATE sessions SET rowid = (SELECT shuffled FROM shuffled WHERE old = sessions.rowid)`)
+					require.NoError(b, err)
+				}
+				for _, timezone := range []string{"UTC", "America/New_York"} {
+					for _, window := range []struct {
+						name, from, to string
+						want           int
+					}{
+						{"two_days", "2026-10-31", "2026-11-01", 300},
+						{"empty", "2026-11-03", "2026-11-04", 0},
+						{"year", "2025-11-02", "2026-11-01", old + 300},
+					} {
+						b.Run(timezone+"/"+window.name, func(b *testing.B) {
+							f := AnalyticsFilter{From: window.from, To: window.to, Timezone: timezone}
+							b.ReportAllocs()
+							b.ResetTimer()
+							for b.Loop() {
+								resp, err := d.GetAnalyticsSummary(ctx, f)
+								require.NoError(b, err)
+								require.Equal(b, window.want, resp.TotalSessions)
+							}
+						})
 					}
-				})
-			}
-		})
+				}
+			})
+		}
 	}
 }
 

@@ -118,11 +118,10 @@ func TestAnalyticsDateWindowSearchesStartedIndex(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			where, args := baseFilter().buildWhereWithDate(tc.dateCol, true, tc.sessionID)
-			rows, err := d.getReader().QueryContext(t.Context(), "EXPLAIN QUERY PLAN SELECT id FROM "+tc.table+" WHERE "+where, args...)
-			require.NoError(t, err)
-			defer rows.Close()
-			plan := strings.Join(explainQueryPlanDetails(t, rows), "\n")
-			assert.Contains(t, plan, "idx_sessions_started")
+			plan := queryPlanOf(t, d, "SELECT id FROM "+tc.table+" WHERE "+where, args...)
+			assert.Contains(t, plan, "LIST SUBQUERY")
+			assert.Contains(t, plan, "COVERING INDEX idx_sessions_started")
+			assert.Contains(t, plan, "USING INTEGER PRIMARY KEY (rowid=?)")
 			assert.NotContains(t, plan, "SCAN sessions")
 			assert.NotContains(t, plan, "SCAN s")
 		})

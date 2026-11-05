@@ -351,6 +351,11 @@ func (db *DB) getAnalyticsFilteredMessageStats(
 	return scope.StatsBySession(), nil
 }
 
+func analyticsSessionPrefix(sessionIDExpr string) string {
+	table, _, _ := strings.Cut(sessionIDExpr, ".")
+	return table + "."
+}
+
 func (f AnalyticsFilter) buildWhereWithDate(dateCol string, includeDate bool, sessionIDExpr string) (string, []any) {
 	if sessionIDExpr == "" {
 		sessionIDExpr = "sessions.id"
@@ -360,9 +365,8 @@ func (f AnalyticsFilter) buildWhereWithDate(dateCol string, includeDate bool, se
 	if includeDate {
 		from, to := f.utcRange()
 		dates = append(dates, dateCol+" >= "+b.Add(from), dateCol+" <= "+b.Add(to))
-		startedAt := strings.TrimSuffix(sessionIDExpr, "id") + "started_at"
-		// The date bounds imply this index guard; NULL and empty starts keep the created_at fallback.
-		dates = append(dates, "("+startedAt+" BETWEEN "+b.Add(from)+" AND "+b.Add(to)+" OR "+startedAt+" IS NULL OR "+startedAt+" = '')")
+		// Without STAT4, SQLite takes even wide index ranges; collect rowids through the covering index, then fetch rows in table order.
+		dates = append(dates, analyticsSessionPrefix(sessionIDExpr)+"rowid IN (SELECT rowid FROM sessions WHERE started_at BETWEEN "+b.Add(from)+" AND "+b.Add(to)+" OR started_at IS NULL OR started_at = '')")
 	}
 	where := BuildAnalyticsWhere(f, b, "", sessionIDExpr, dates)
 	return where, b.Args()
