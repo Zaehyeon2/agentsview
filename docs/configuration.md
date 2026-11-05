@@ -2410,13 +2410,14 @@ sudo sysctl fs.inotify.max_user_watches=524288
 ## Memory Behavior
 
 The serve daemon bounds its own memory, so no tuning is required. It installs a
-256 MiB Go soft memory limit, and on Linux it also limits glibc to two malloc
-arenas and pins the heap trim threshold at 1 MiB. Pinning the threshold turns
-off glibc's dynamic adjustment, which otherwise lets a long-running process stop
-trimming until as much as 64 MiB is free, so memory freed by the SQLite driver
-goes back to the operating system instead of accumulating as fragmentation.
-Setting `GOMEMLIMIT`, `MALLOC_ARENA_MAX`, or `MALLOC_TRIM_THRESHOLD_` in the
-daemon's environment overrides the corresponding default.
+256 MiB Go soft memory limit. On Linux, every agentsview process limits glibc to
+two malloc arenas and pins the heap trim threshold at 1 MiB. Pinning the
+threshold turns off glibc's dynamic adjustment, which otherwise lets a
+long-running process stop trimming until as much as 64 MiB is free, so memory
+freed by the SQLite driver goes back to the operating system instead of
+accumulating as fragmentation. Setting `GOMEMLIMIT`, `MALLOC_ARENA_MAX`, or
+`MALLOC_TRIM_THRESHOLD_` in the process's environment overrides the
+corresponding default.
 
 ## Manual Sync
 
