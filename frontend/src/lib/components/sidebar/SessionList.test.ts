@@ -9,7 +9,7 @@ import type { Session } from "../../api/types.js";
 import { starred } from "../../stores/starred.svelte.js";
 import { ui } from "../../stores/ui.svelte.js";
 import { m, setLocale } from "../../i18n/index.js";
-import { ITEM_HEIGHT, OVERSCAN, STORAGE_KEY_GROUP } from "./session-list-utils.js";
+import { ITEM_HEIGHT, STORAGE_KEY_GROUP } from "./session-list-utils.js";
 
 vi.mock("../../api/client.js", () => ({
   listSessions: vi.fn().mockResolvedValue({
@@ -362,7 +362,7 @@ describe("SessionList visible hydration", () => {
     vi.restoreAllMocks();
   });
 
-  it("initial hydration target uses viewport rows plus overscan", async () => {
+  it("hydrates visible viewport rows plus overscan", async () => {
     sessions.sessions = Array.from({ length: 20 }, (_, i) =>
       makeSession({ id: `s${i}`, is_index_only: true }),
     );
@@ -371,14 +371,13 @@ describe("SessionList visible hydration", () => {
     component = mount(SessionList, { target: document.body });
     await tick();
 
-    const expected = Math.ceil((ITEM_HEIGHT * 3) / ITEM_HEIGHT) + OVERSCAN;
     expect(hydrate).toHaveBeenCalledWith(
-      Array.from({ length: expected }, (_, i) => `s${i}`),
+      ["s0", "s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8", "s9", "s10", "s11", "s12", "s13"],
       sessions.sidebarIndexVersion,
     );
   });
 
-  it("holds first visible index-only rows until initial hydration resolves", async () => {
+  it("paints first visible index-only rows before hydration resolves", async () => {
     sessions.sessions = [
       makeSession({ id: "pending", project: "placeholder", is_index_only: true }),
     ];
@@ -392,7 +391,7 @@ describe("SessionList visible hydration", () => {
     component = mount(SessionList, { target: document.body });
     await tick();
 
-    expect(document.querySelector(".session-item")).toBeNull();
+    expect(document.querySelector(".session-name")?.textContent).toBe("placeholder");
 
     sessions.sessions = [
       makeSession({
@@ -405,7 +404,7 @@ describe("SessionList visible hydration", () => {
     await tick();
     await tick();
 
-    expect(document.body.textContent).toContain("hydrated visible title");
+    expect(document.querySelector(".session-name")?.textContent).toBe("hydrated visible title");
   });
 
   it("renders renamed rows without waiting for hydration", async () => {
@@ -444,9 +443,8 @@ describe("SessionList visible hydration", () => {
   });
 
   it("reveals a deep-linked child session without looping before hydration", async () => {
-    // Opening a child session's URL directly selects it while the sidebar
-    // still paints its pre-hydration snapshot, so the child row cannot be
-    // revealed yet.
+    // Opening a child session's URL directly must reveal it even while
+    // the sidebar's title hydration is pending.
     sessions.sessions = [
       makeSession({ id: "launcher", first_message: "Launcher", is_index_only: true }),
       makeSession({
